@@ -1,325 +1,235 @@
+# modules/user_auth.py — NO-DB / NO-LOGIN VERSION
+
 import streamlit as st
 from typing import Optional, Dict
-from modules.database import db_manager
 
 class UserAuth:
-    """Simple username-based user authentication and identification system"""
-    
+    """
+    Lightweight session-only 'auth' shim.
+    - No database
+    - No real login
+    - Keeps the same public methods as the original so other modules don't break.
+    """
+
+    DEFAULT_USERNAME = "local"
+    DEFAULT_USER_ID = 0
+
     @staticmethod
     def initialize_session():
-        """Initialize user session state variables"""
-        if 'user_id' not in st.session_state:
-            st.session_state.user_id = None
-        if 'username' not in st.session_state:
-            st.session_state.username = None
-        if 'user_data' not in st.session_state:
-            st.session_state.user_data = None
-        if 'auto_save_enabled' not in st.session_state:
+        """Initialize session keys used across the app."""
+        if "user_id" not in st.session_state:
+            st.session_state.user_id = UserAuth.DEFAULT_USER_ID
+        if "username" not in st.session_state:
+            st.session_state.username = UserAuth.DEFAULT_USERNAME
+        if "user_data" not in st.session_state:
+            st.session_state.user_data = {
+                "id": UserAuth.DEFAULT_USER_ID,
+                "username": UserAuth.DEFAULT_USERNAME,
+                "created_at": None,  # no DB date
+            }
+        if "auto_save_enabled" not in st.session_state:
             st.session_state.auto_save_enabled = True
-    
+
+        # Local-only caches/state used by pages
+        if "portfolio" not in st.session_state:
+            st.session_state.portfolio = []
+        if "alerts" not in st.session_state:
+            st.session_state.alerts = []
+        if "alert_history" not in st.session_state:
+            st.session_state.alert_history = []
+        if "watchlist" not in st.session_state:
+            st.session_state.watchlist = ["AAPL", "GOOGL", "MSFT", "TSLA", "NVDA", "AMZN"]
+        if "preferences" not in st.session_state:
+            st.session_state.preferences = {}  # {(type, key): value}
+
     @staticmethod
     def get_current_user() -> Optional[Dict]:
-        """Get current logged-in user data"""
+        """Return the pseudo-user dict."""
         UserAuth.initialize_session()
-        if st.session_state.user_id and st.session_state.user_data:
-            return st.session_state.user_data
-        return None
-    
+        return st.session_state.user_data
+
     @staticmethod
     def get_current_user_id() -> Optional[int]:
-        """Get current user ID"""
+        """Return a constant pseudo-user id."""
         UserAuth.initialize_session()
         return st.session_state.user_id
-    
+
     @staticmethod
     def is_logged_in() -> bool:
-        """Check if user is logged in"""
+        """
+        Always 'True' so the app never blocks behind a login form.
+        If your main app checks this to gate content, it will pass.
+        """
         UserAuth.initialize_session()
-        return st.session_state.user_id is not None
-    
+        return True
+
     @staticmethod
     def login_user(username: str) -> bool:
-        """Login user with username (create if doesn't exist)"""
-        if not username or not username.strip():
-            st.error("Please enter a valid username")
-            return False
-        
-        username = username.strip().lower()
-        
-        try:
-            # Try to get existing user
-            user = db_manager.get_user(username)
-            
-            if user:
-                # Existing user
-                st.session_state.user_id = user['id']
-                st.session_state.username = user['username']
-                st.session_state.user_data = user
-                
-                # Update last login
-                db_manager.update_last_login(user['id'])
-                
-                st.success(f"Welcome back, {username}!")
-            else:
-                # Create new user
-                user = db_manager.create_user(username)
-                if user:
-                    st.session_state.user_id = user['id']
-                    st.session_state.username = user['username']
-                    st.session_state.user_data = user
-                    
-                    st.success(f"Welcome, {username}! Your profile has been created.")
-                else:
-                    st.error("Failed to create user profile")
-                    return False
-            
-            # Load user data after login
-            UserAuth.load_user_data()
-            return True
-            
-        except Exception as e:
-            st.error(f"Login failed: {str(e)}")
-            return False
-    
+        """
+        Accept any username and set it in session. No DB or validation.
+        This keeps compatibility if something still calls login_user().
+        """
+        UserAuth.initialize_session()
+        u = (username or "").strip() or UserAuth.DEFAULT_USERNAME
+        st.session_state.user_id = UserAuth.DEFAULT_USER_ID
+        st.session_state.username = u
+        st.session_state.user_data = {
+            "id": UserAuth.DEFAULT_USER_ID,
+            "username": u,
+            "created_at": None,
+        }
+        # No DB load; just ensure local state exists
+        UserAuth.load_user_data()
+        return True
+
     @staticmethod
     def logout_user():
-        """Logout current user"""
-        # Save current state before logout
-        if UserAuth.is_logged_in():
-            UserAuth.save_current_state()
-        
-        # Clear session state
-        st.session_state.user_id = None
-        st.session_state.username = None
-        st.session_state.user_data = None
-        
-        # Clear other session data
-        for key in ['portfolio', 'alerts', 'alert_history', 'watchlist']:
-            if key in st.session_state:
-                del st.session_state[key]
-        
-        st.success("Logged out successfully")
+        """
+        'Logout' just resets to the local pseudo-user and clears volatile state.
+        No DB save, but we leave watchlist/portfolio unless you want a hard reset.
+        """
+        # If you want a full reset, uncomment the wipes below.
+        # for key in ["portfolio", "alerts", "alert_history", "watchlist", "preferences"]:
+        #     if key in st.session_state:
+        #         del st.session_state[key]
+
+        st.session_state.user_id = UserAuth.DEFAULT_USER_ID
+        st.session_state.username = UserAuth.DEFAULT_USERNAME
+        st.session_state.user_data = {
+            "id": UserAuth.DEFAULT_USER_ID,
+            "username": UserAuth.DEFAULT_USERNAME,
+            "created_at": None,
+        }
+        st.success("Session reset")
         st.rerun()
-    
+
     @staticmethod
     def load_user_data():
-        """Load user data from database into session state"""
-        user_id = UserAuth.get_current_user_id()
-        if not user_id:
-            return
-        
-        try:
-            # Load portfolio
-            portfolio_data = db_manager.get_user_portfolio(user_id)
-            portfolio_list = []
-            for pos in portfolio_data:
-                portfolio_list.append({
-                    'id': pos['id'],
-                    'symbol': pos['symbol'],
-                    'shares': float(pos['shares']),
-                    'purchase_price': float(pos['purchase_price']),
-                    'purchase_date': pos['purchase_date'],
-                    'purchase_value': float(pos['purchase_value'])
-                })
-            st.session_state.portfolio = portfolio_list
-            
-            # Load alerts
-            alerts_data = db_manager.get_user_alerts(user_id, status='Active')
-            alerts_list = []
-            for alert in alerts_data:
-                alert_dict = {
-                    'id': alert['id'],
-                    'alert_type': alert['alert_type'],
-                    'symbol': alert['symbol'],
-                    'alert_name': alert['alert_name'],
-                    'condition': alert['condition_type'],
-                    'notification_method': alert.get('notification_methods', []),
-                    'status': alert['status'],
-                    'triggered_count': alert['triggered_count'],
-                    'created_at': alert['created_at'].isoformat() if alert['created_at'] else None
-                }
-                
-                # Add price/volume conditions
-                if alert['target_price']:
-                    alert_dict['target_price'] = float(alert['target_price'])
-                if alert['lower_price']:
-                    alert_dict['lower_price'] = float(alert['lower_price'])
-                if alert['upper_price']:
-                    alert_dict['upper_price'] = float(alert['upper_price'])
-                if alert['target_volume']:
-                    alert_dict['target_volume'] = alert['target_volume']
-                
-                alerts_list.append(alert_dict)
-            
-            st.session_state.alerts = alerts_list
-            
-            # Load alert history
-            alert_history = db_manager.get_user_alerts(user_id)
-            st.session_state.alert_history = alert_history
-            
-            # Load watchlist
-            watchlist = db_manager.get_user_watchlist(user_id)
-            st.session_state.watchlist = watchlist if watchlist else ['AAPL', 'GOOGL', 'MSFT', 'TSLA', 'NVDA', 'AMZN']
-            
-        except Exception as e:
-            st.error(f"Error loading user data: {str(e)}")
-    
+        """
+        No-op for DB; ensures required session keys exist.
+        """
+        UserAuth.initialize_session()
+
     @staticmethod
     def save_current_state():
-        """Save current session state to database"""
-        user_id = UserAuth.get_current_user_id()
-        if not user_id or not st.session_state.get('auto_save_enabled', True):
-            return
-        
-        try:
-            # Save watchlist
-            if 'watchlist' in st.session_state:
-                db_manager.save_watchlist(user_id, st.session_state.watchlist)
-            
-        except Exception as e:
-            st.error(f"Error saving user data: {str(e)}")
-    
+        """
+        No-op: previously persisted to DB. Left for compatibility.
+        """
+        return
+
+    # ---------- "Auto-save" shims (session only) ----------
+
     @staticmethod
     def auto_save_portfolio_position(symbol: str, shares: float, purchase_price: float, purchase_date):
-        """Auto-save a new portfolio position"""
-        user_id = UserAuth.get_current_user_id()
-        if not user_id or not st.session_state.get('auto_save_enabled', True):
+        """
+        Store a position locally in session. Returns True if appended.
+        """
+        UserAuth.initialize_session()
+        try:
+            st.session_state.portfolio.append(
+                {
+                    "id": None,  # no DB id
+                    "symbol": symbol,
+                    "shares": float(shares),
+                    "purchase_price": float(purchase_price),
+                    "purchase_date": purchase_date,
+                    "purchase_value": float(shares) * float(purchase_price),
+                }
+            )
+            return True
+        except Exception:
             return False
-        
-        return db_manager.save_portfolio_position(user_id, symbol, shares, purchase_price, purchase_date)
-    
+
     @staticmethod
     def auto_save_alert(alert_data: Dict):
-        """Auto-save a new alert"""
-        user_id = UserAuth.get_current_user_id()
-        if not user_id or not st.session_state.get('auto_save_enabled', True):
+        """
+        Store alerts locally in session. Returns True if appended.
+        """
+        UserAuth.initialize_session()
+        try:
+            st.session_state.alerts.append(alert_data)
+            # Mirror to alert_history for UI that expects it
+            st.session_state.alert_history.append(alert_data)
+            return True
+        except Exception:
             return False
-        
-        return db_manager.save_alert(user_id, alert_data)
-    
+
     @staticmethod
-    def auto_save_watchlist_symbol(symbol: str, action: str = 'add'):
-        """Auto-save watchlist changes"""
-        user_id = UserAuth.get_current_user_id()
-        if not user_id or not st.session_state.get('auto_save_enabled', True):
+    def auto_save_watchlist_symbol(symbol: str, action: str = "add"):
+        """
+        Add/remove from session watchlist.
+        """
+        UserAuth.initialize_session()
+        s = (symbol or "").strip().upper()
+        if not s:
             return False
-        
-        if action == 'add':
-            return db_manager.add_to_watchlist(user_id, symbol)
-        elif action == 'remove':
-            return db_manager.remove_from_watchlist(user_id, symbol)
+
+        wl = st.session_state.watchlist
+        if action == "add":
+            if s not in wl:
+                wl.append(s)
+                return True
+            return False
+        elif action == "remove":
+            if s in wl:
+                wl.remove(s)
+                return True
+            return False
         return False
-    
+
     @staticmethod
     def auto_save_preference(preference_type: str, preference_key: str, preference_value):
-        """Auto-save user preference"""
-        user_id = UserAuth.get_current_user_id()
-        if not user_id or not st.session_state.get('auto_save_enabled', True):
-            return False
-        
-        return db_manager.save_preference(user_id, preference_type, preference_key, preference_value)
-    
+        """
+        Store a preference in session under a composite key.
+        """
+        UserAuth.initialize_session()
+        st.session_state.preferences[(preference_type, preference_key)] = preference_value
+        return True
+
     @staticmethod
     def get_user_preference(preference_type: str, preference_key: str, default_value=None):
-        """Get user preference with default value"""
-        user_id = UserAuth.get_current_user_id()
-        if not user_id:
-            return default_value
-        
-        pref_value = db_manager.get_preference(user_id, preference_type, preference_key)
-        return pref_value if pref_value is not None else default_value
-    
+        """
+        Read a preference from session; return default if missing.
+        """
+        UserAuth.initialize_session()
+        return st.session_state.preferences.get((preference_type, preference_key), default_value)
+
+    # ---------- UI shims (kept so existing calls won't crash) ----------
+
     @staticmethod
     def display_login_form():
-        """Display login form for user authentication"""
-        st.markdown("### 🔐 User Login")
-        
-        with st.form("login_form"):
-            st.markdown("Enter your username to access your personalized Bloomberg Terminal:")
-            username = st.text_input(
-                "Username", 
-                placeholder="Enter your username",
-                help="Create a new account by entering a new username, or login with an existing one"
+        """
+        No real login anymore. Show a tiny info panel so existing
+        calls don't break and users know it's session-only.
+        """
+        UserAuth.initialize_session()
+        with st.expander("Session Profile (no login required)"):
+            st.markdown(
+                f"**User:** `{st.session_state.username}`  \n"
+                "This build runs entirely in your local Streamlit session (no database)."
             )
-            
-            col1, col2 = st.columns(2)
-            with col1:
-                login_btn = st.form_submit_button("🚀 Login / Create Account", use_container_width=True)
-            with col2:
-                if st.form_submit_button("ℹ️ About Profiles", use_container_width=True):
-                    st.info("""
-                    **User Profiles provide:**
-                    - Persistent portfolio tracking
-                    - Saved alerts and notifications
-                    - Custom watchlists
-                    - Chart preferences and settings
-                    - Screener filters and saved searches
-                    - Auto-save functionality across all modules
-                    """)
-            
-            if login_btn and username:
-                if UserAuth.login_user(username):
-                    st.rerun()
-        
-        # Display some benefits of using profiles
-        st.markdown("---")
-        st.markdown("### ✨ Benefits of User Profiles")
-        
-        col1, col2, col3 = st.columns(3)
-        
-        with col1:
-            st.markdown("""
-            **📊 Portfolio Tracking**
-            - Persistent holdings
-            - Performance history
-            - Auto-save positions
-            """)
-        
-        with col2:
-            st.markdown("""
-            **🚨 Alert Management**
-            - Price alerts
-            - Volume alerts
-            - Technical indicators
-            """)
-        
-        with col3:
-            st.markdown("""
-            **⚙️ Personal Settings**
-            - Chart preferences
-            - Saved watchlists
-            - Custom screener filters
-            """)
-    
+            # Optional: allow renaming the session "username"
+            new_name = st.text_input("Session name (optional)", value=st.session_state.username)
+            if st.button("Update session name"):
+                UserAuth.login_user(new_name)
+                st.success("Session name updated")
+                st.rerun()
+
     @staticmethod
     def display_user_menu():
-        """Display user menu in sidebar"""
-        if not UserAuth.is_logged_in():
-            return
-        
-        user = UserAuth.get_current_user()
-        if user:
-            st.sidebar.markdown("---")
-            st.sidebar.markdown(f"👤 **Logged in as:** {user['username']}")
-            st.sidebar.markdown(f"📅 **Member since:** {user['created_at'].strftime('%Y-%m-%d') if user['created_at'] else 'Unknown'}")
-            
-            # Auto-save toggle
-            st.session_state.auto_save_enabled = st.sidebar.checkbox(
-                "💾 Auto-save enabled", 
-                value=st.session_state.get('auto_save_enabled', True),
-                help="Automatically save portfolio, alerts, and preferences"
-            )
-            
-            col1, col2 = st.sidebar.columns(2)
-            
-            with col1:
-                if st.button("💾 Save Now", help="Manually save current state"):
-                    UserAuth.save_current_state()
-                    st.success("Data saved!")
-            
-            with col2:
-                if st.button("🚪 Logout"):
-                    UserAuth.logout_user()
+        """
+        Sidebar info so pages that expect a user menu won't fail.
+        """
+        UserAuth.initialize_session()
+        st.sidebar.markdown("---")
+        st.sidebar.markdown(f"👤 **Session:** `{st.session_state.username}`")
+        st.session_state.auto_save_enabled = st.sidebar.checkbox(
+            "💾 Auto-save (session only)",
+            value=st.session_state.get("auto_save_enabled", True),
+            help="Saves to this Streamlit session state (no database).",
+        )
+        if st.sidebar.button("Reset session"):
+            UserAuth.logout_user()
 
-# Initialize auth system
+# Instantiate for `from modules.user_auth import user_auth`
 user_auth = UserAuth()
